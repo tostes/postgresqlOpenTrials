@@ -20,12 +20,26 @@ Todos os scripts foram escritos por **Diego Tostes** e aceitam parâmetros via l
 
 Os scripts utilizam `psycopg2` para conexão com PostgreSQL e carregam a configuração do banco por variáveis de ambiente (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) ou por um arquivo JSON informado via `--config`.
 
-### Exemplo de uso
+### `scripts/schema_versioning.py`
+
+O script percorre os diretórios informados, ordena os arquivos SQL encontrados e calcula, para cada um, um hash SHA-256 baseado no conteúdo do arquivo. Esses hashes são comparados com o histórico registrado na tabela `schema_version` para identificar arquivos novos ou modificados.
+
+- Execução padrão: sem `--record`, o script apenas exibe quais alterações seriam aplicadas, permitindo uma revisão prévia.
+- Execução com `--record`: além de exibir as alterações, grava o novo hash e metadados (arquivo, caminho, timestamp) na tabela `schema_version`.
+
+Para configurar a conexão, utilize as variáveis de ambiente `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` e `DB_NAME` ou passe um arquivo JSON com as chaves equivalentes via `--config caminho/para/config.json`.
+
+### `scripts/create_tables.py`
+
+Aceita o argumento opcional `--priority-prefix`, cujo padrão é `vocabulary_`, para garantir que os arquivos cujos nomes começam com o prefixo informado sejam executados antes dos demais. Isso assegura que tabelas de vocabulário sejam criadas antes das tabelas que dependem delas.
+
+### Exemplos
 
 ```bash
-python scripts/create_tables.py
+python scripts/create_tables.py --priority-prefix vocabulary_
 python scripts/create_procedures.py
 python scripts/populate_data.py
+python scripts/schema_versioning.py database/tables database/procedures database/populate
 python scripts/schema_versioning.py database/tables database/procedures database/populate --record
 ```
 
