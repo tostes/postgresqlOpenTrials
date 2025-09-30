@@ -40,6 +40,14 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         help="Python logging level (default: INFO).",
     )
+    parser.add_argument(
+        "--priority-prefix",
+        default="vocabulary_",
+        help=(
+            "Optional filename prefix to prioritize when executing table scripts "
+            "(default: vocabulary_)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -57,7 +65,7 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=args.log_level.upper())
     config = load_config(args.config)
-    sql_files = list(iter_sql_files(args.directory))
+    sql_files = list(iter_sql_files(args.directory, args.priority_prefix))
     execute_sql_files(sql_files, config)
 
 
