@@ -48,9 +48,21 @@ def execute_sql_files(paths: Iterable[Path], config: DatabaseConfig = DEFAULT_CO
             execute_sql_file(sql_path, connection)
 
 
-def iter_sql_files(directory: Path) -> Iterable[Path]:
-    """Yield SQL files from a directory sorted alphabetically."""
+def iter_sql_files(
+    directory: Path, priority_prefix: str | None = "vocabulary_"
+) -> Iterable[Path]:
+    """Yield SQL files from a directory with optional prioritized prefix ordering."""
 
-    for path in sorted(directory.glob("*.sql")):
-        if path.is_file():
-            yield path
+    sql_files = [path for path in directory.glob("*.sql") if path.is_file()]
+
+    if priority_prefix:
+        prioritized = sorted(
+            (path for path in sql_files if path.name.startswith(priority_prefix))
+        )
+        others = sorted(
+            (path for path in sql_files if not path.name.startswith(priority_prefix))
+        )
+        yield from prioritized
+        yield from others
+    else:
+        yield from sorted(sql_files)
