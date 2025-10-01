@@ -303,7 +303,9 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
             oid_row = cursor.fetchone()
 
             if oid_row and oid_row[0] is not None:
-                cursor.execute("SELECT pg_get_functiondef(%s)", (oid_row[0],))
+                cursor.execute(
+                    "SELECT pg_get_functiondef(%s::regprocedure)", (oid_row[0],)
+                )
                 current_definition_row = cursor.fetchone()
                 current_definition = (
                     current_definition_row[0] if current_definition_row else None
