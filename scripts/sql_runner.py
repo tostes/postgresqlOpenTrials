@@ -6,6 +6,7 @@ Helper utilities to execute SQL files against PostgreSQL.
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -30,11 +31,41 @@ def get_connection(config: DatabaseConfig = DEFAULT_CONFIG) -> Iterator[PgConnec
         connection.close()
 
 
+def find_create_table_target(sql_text: str) -> tuple[str | None, str] | None:
+    """Return the first (schema, table) pair from a CREATE TABLE statement or ``None``."""
+
+    match = re.search(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+        r"(?:(?P<schema>\w+)\.)?(?P<table>\w+)",
+        sql_text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group("schema"), match.group("table")
+
+
 def execute_sql_file(path: Path, connection: PgConnection) -> None:
-    """Execute all SQL statements contained in the given file."""
+    """Execute SQL file unless its target table already exists in the database.
+
+    When the first ``CREATE TABLE`` target is already present, the SQL is skipped
+    without committing the transaction; otherwise, the statements are executed
+    and the connection is committed.
+    """
 
     LOGGER.info("Executing SQL file: %s", path)
     sql_text = path.read_text(encoding="utf-8")
+    target = find_create_table_target(sql_text)
+
+    if target is not None:
+        schema, table = target
+        regclass = f"{schema}.{table}" if schema else table
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regclass(%s)", (regclass,))
+            if cursor.fetchone()[0] is not None:
+                LOGGER.info("Skipping %s: table already exists", path)
+                return
+
     with connection.cursor() as cursor:
         cursor.execute(sql_text)
     connection.commit()
