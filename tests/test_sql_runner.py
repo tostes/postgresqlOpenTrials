@@ -52,6 +52,7 @@ def test_execute_sql_file_creates_routine_when_absent(tmp_path: Path) -> None:
 
     check_cursor = MagicMock()
     check_cursor.fetchone.return_value = (None,)
+    check_cursor.execute.reset_mock()
     exec_cursor = MagicMock()
 
     connection = _build_connection([check_cursor, exec_cursor])
@@ -78,7 +79,6 @@ def test_execute_sql_file_skips_and_archives_when_definition_matches(
     check_cursor.fetchone.side_effect = [
         (12345,),
         (_routine_sql(),),
-        ("public", "test_func", "f", "a integer"),
     ]
 
     connection = _build_connection([check_cursor])
@@ -90,6 +90,10 @@ def test_execute_sql_file_skips_and_archives_when_definition_matches(
     assert archived_path.exists()
     assert archived_path.read_text(encoding="utf-8") == _routine_sql()
     connection.commit.assert_not_called()
+    assert check_cursor.execute.call_args_list == [
+        (("SELECT to_regprocedure(%s)", ("public.test_func(integer)",)),),
+        (("SELECT pg_get_functiondef(to_regprocedure(%s))", ("public.test_func(integer)",)),),
+    ]
 
 
 def test_execute_sql_file_replaces_when_definition_differs(tmp_path: Path) -> None:
@@ -114,3 +118,16 @@ def test_execute_sql_file_replaces_when_definition_differs(tmp_path: Path) -> No
     exec_cursor.execute.assert_any_call("DROP FUNCTION public.test_func(integer)")
     exec_cursor.execute.assert_any_call(sql_path.read_text(encoding="utf-8"))
     connection.commit.assert_called_once()
+    assert check_cursor.execute.call_args_list == [
+        (("SELECT to_regprocedure(%s)", ("public.test_func(integer)",)),),
+        (("SELECT pg_get_functiondef(to_regprocedure(%s))", ("public.test_func(integer)",)),),
+        (
+            (
+                "SELECT n.nspname, p.proname, p.prokind, "
+                "pg_get_function_identity_arguments(p.oid) "
+                "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE p.oid = to_regprocedure(%s)",
+                ("public.test_func(integer)",),
+            ),
+        ),
+    ]

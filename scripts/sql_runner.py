@@ -228,8 +228,8 @@ def _extract_create_statement(sql_text: str, start_index: int) -> str:
 
 def find_create_routine_target(
     sql_text: str,
-) -> tuple[str, str | None, str, str, str] | None:
-    """Return metadata for the first CREATE FUNCTION/PROCEDURE statement in ``sql_text``."""
+) -> tuple[str, str, str] | None:
+    """Return kind, qualified name, and signature for the first routine statement."""
 
     match = re.search(
         r"CREATE\s+(?:OR\s+REPLACE\s+)?(?P<kind>FUNCTION|PROCEDURE)\s+"
@@ -240,13 +240,14 @@ def find_create_routine_target(
     if not match:
         return None
 
-    statement = _extract_create_statement(sql_text, match.start())
     argument_signature = _normalize_argument_signature(match.group("args"))
     schema = match.group("schema")
     kind = match.group("kind").upper()
     name = match.group("name")
 
-    return kind, schema, name, argument_signature, statement
+    qualified_name = f"{schema}.{name}" if schema else name
+
+    return kind, qualified_name, argument_signature
 
 
 def _normalize_routine_definition(definition: str) -> str:
@@ -262,14 +263,14 @@ def _normalize_routine_definition(definition: str) -> str:
 
 
 def execute_sql_file(path: Path, connection: PgConnection) -> None:
-    """Execute SQL file, skipping unchanged routine definitions or existing tables.
+    """Execute SQL file, skipping unchanged routines or existing tables.
 
-    The function inspects the SQL for the first ``CREATE FUNCTION``/``CREATE PROCEDURE``
-    signature. When found, it queries PostgreSQL for the current definition using
-    ``pg_get_functiondef``. Unchanged routines are archived instead of being executed;
-    changed routines are dropped before re-creation. If the SQL contains a table
-    definition, execution is skipped when the table already exists. Otherwise, the
-    SQL is executed and the transaction committed.
+    The file is inspected for the first ``CREATE FUNCTION``/``CREATE PROCEDURE``
+    statement. When present, ``to_regprocedure`` and ``pg_get_functiondef`` are used to
+    detect existing definitions. Identical routine bodies are archived without execution.
+    Modified routines are dropped (or replaced) before re-creation. ``CREATE TABLE``
+    statements are skipped when the table already exists. All other SQL executes
+    normally with the transaction committed at the end.
     """
 
     LOGGER.info("Executing SQL file: %s", path)
@@ -279,24 +280,13 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
     drop_statement: str | None = None
 
     if routine_target is not None:
-        (
-            routine_kind,
-            routine_schema,
-            routine_name,
-            routine_argument_signature,
-            routine_statement,
-        ) = routine_target
-        qualified_name = (
-            f"{routine_schema}.{routine_name}"
-            if routine_schema
-            else routine_name
-        )
+        routine_kind, qualified_name, routine_argument_signature = routine_target
         signature = (
             f"{qualified_name}({routine_argument_signature})"
             if routine_argument_signature
             else f"{qualified_name}()"
         )
-        normalized_new_definition = _normalize_routine_definition(routine_statement)
+        normalized_new_definition = _normalize_routine_definition(sql_text)
 
         with connection.cursor() as cursor:
             cursor.execute("SELECT to_regprocedure(%s)", (signature,))
@@ -304,7 +294,7 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
 
             if oid_row and oid_row[0] is not None:
                 cursor.execute(
-                    "SELECT pg_get_functiondef(%s::regprocedure)", (oid_row[0],)
+                    "SELECT pg_get_functiondef(to_regprocedure(%s))", (signature,)
                 )
                 current_definition_row = cursor.fetchone()
                 current_definition = (
@@ -332,8 +322,8 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
                     "SELECT n.nspname, p.proname, p.prokind, "
                     "pg_get_function_identity_arguments(p.oid) "
                     "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-                    "WHERE p.oid = %s",
-                    (oid_row[0],),
+                    "WHERE p.oid = to_regprocedure(%s)",
+                    (signature,),
                 )
                 identity_row = cursor.fetchone()
                 if identity_row:
