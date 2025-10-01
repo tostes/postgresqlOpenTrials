@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -20,17 +19,6 @@ from db_config import DatabaseConfig, DEFAULT_CONFIG
 
 LOGGER = logging.getLogger(__name__)
 PROCEDURE_ARCHIVE_DIR = Path("database/procedures/created_procedure")
-
-
-@dataclass(slots=True)
-class RoutineTarget:
-    """Details describing the first CREATE FUNCTION/PROCEDURE statement."""
-
-    kind: str
-    schema: str | None
-    name: str
-    argument_signature: str
-    statement: str
 
 
 @contextmanager
@@ -238,7 +226,9 @@ def _extract_create_statement(sql_text: str, start_index: int) -> str:
     return sql_text[start_index:]
 
 
-def find_create_routine_target(sql_text: str) -> RoutineTarget | None:
+def find_create_routine_target(
+    sql_text: str,
+) -> tuple[str, str | None, str, str, str] | None:
     """Return metadata for the first CREATE FUNCTION/PROCEDURE statement in ``sql_text``."""
 
     match = re.search(
@@ -256,13 +246,7 @@ def find_create_routine_target(sql_text: str) -> RoutineTarget | None:
     kind = match.group("kind").upper()
     name = match.group("name")
 
-    return RoutineTarget(
-        kind=kind,
-        schema=schema,
-        name=name,
-        argument_signature=argument_signature,
-        statement=statement,
-    )
+    return kind, schema, name, argument_signature, statement
 
 
 def _normalize_routine_definition(definition: str) -> str:
@@ -295,19 +279,24 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
     drop_statement: str | None = None
 
     if routine_target is not None:
+        (
+            routine_kind,
+            routine_schema,
+            routine_name,
+            routine_argument_signature,
+            routine_statement,
+        ) = routine_target
         qualified_name = (
-            f"{routine_target.schema}.{routine_target.name}"
-            if routine_target.schema
-            else routine_target.name
+            f"{routine_schema}.{routine_name}"
+            if routine_schema
+            else routine_name
         )
         signature = (
-            f"{qualified_name}({routine_target.argument_signature})"
-            if routine_target.argument_signature
+            f"{qualified_name}({routine_argument_signature})"
+            if routine_argument_signature
             else f"{qualified_name}()"
         )
-        normalized_new_definition = _normalize_routine_definition(
-            routine_target.statement
-        )
+        normalized_new_definition = _normalize_routine_definition(routine_statement)
 
         with connection.cursor() as cursor:
             cursor.execute("SELECT to_regprocedure(%s)", (signature,))
@@ -347,7 +336,7 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
                 identity_row = cursor.fetchone()
                 if identity_row:
                     kind_lookup = {"f": "FUNCTION", "p": "PROCEDURE", "a": "AGGREGATE"}
-                    drop_kind = kind_lookup.get(identity_row[2], routine_target.kind)
+                    drop_kind = kind_lookup.get(identity_row[2], routine_kind)
                     drop_signature_args = identity_row[3] or ""
                     drop_qualified_name = f"{identity_row[0]}.{identity_row[1]}"
                     drop_statement = (
@@ -355,13 +344,9 @@ def execute_sql_file(path: Path, connection: PgConnection) -> None:
                         f"({drop_signature_args})"
                     )
                 else:
-                    drop_args = (
-                        routine_target.argument_signature
-                        if routine_target.argument_signature
-                        else ""
-                    )
+                    drop_args = routine_argument_signature if routine_argument_signature else ""
                     drop_statement = (
-                        f"DROP {routine_target.kind} {qualified_name}"
+                        f"DROP {routine_kind} {qualified_name}"
                         f"({drop_args})"
                     )
 
